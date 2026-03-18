@@ -43,12 +43,26 @@ class ExportHtml {
       preEle.replaceWith(mermaidContainer)
     }
     const mermaid = await loadRenderer('mermaid')
-    // We only export light theme, so set mermaid theme to `default`, in the future, we can choose whick theme to export.
+    // We only export light theme, so set mermaid theme to 'default'.
     mermaid.initialize({
       securityLevel: 'strict',
       theme: 'default'
     })
-    mermaid.init(undefined, this.exportContainer.querySelectorAll('div.mermaid'))
+    // v11: Use run() instead of deprecated init()
+    const mermaidElements = this.exportContainer.querySelectorAll('div.mermaid')
+    if (mermaidElements.length > 0) {
+      // v11: run() expects each node to have code in textContent
+      for (const element of mermaidElements) {
+        try {
+          await mermaid.run({
+            nodes: [element],
+            suppressErrors: false
+          })
+        } catch (err) {
+          console.error('Mermaid render error:', err)
+        }
+      }
+    }
     if (this.muya) {
       mermaid.initialize({
         securityLevel: 'strict',

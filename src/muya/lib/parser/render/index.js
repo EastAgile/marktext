@@ -1,6 +1,6 @@
 import loadRenderer from '../../renderers'
-import { CLASS_OR_ID, PREVIEW_DOMPURIFY_CONFIG } from '../../config'
-import { conflict, mixins, camelToSnake, sanitize } from '../../utils'
+import { CLASS_OR_ID } from '../../config'
+import { conflict, mixins, camelToSnake } from '../../utils'
 import { patch, toVNode, toHTML, h } from './snabbdom'
 import { beginRules } from '../rules'
 import renderInlines from './renderInlines'
@@ -98,23 +98,94 @@ class StateRender {
   async renderMermaid () {
     if (this.mermaidCache.size) {
       const mermaid = await loadRenderer('mermaid')
+
+      // Only override the specific themeVariables that mermaid gets wrong.
+      // Do NOT override node text colours — mermaid's own themes handle
+      // contrast correctly (white text on dark fills, dark on light fills).
+      // We only fix: edge label backgrounds, pie legends, and signal text.
+      const isDark = document.body.classList.contains('dark')
+      const labelColor = isDark ? '#ffffff' : '#1a1a1a'
+      const neutralBg = isDark ? '#1e1e1e' : '#ffffff'
+
       mermaid.initialize({
         securityLevel: 'strict',
-        theme: this.muya.options.mermaidTheme
+        theme: this.muya.options.mermaidTheme || 'default',
+        themeVariables: {
+          edgeLabelBackground: neutralBg,
+          signalTextColor: labelColor,
+          pieTitleTextColor: labelColor,
+          pieSectionTextColor: '#fff',
+          pieLegendTextColor: labelColor
+        },
+        startOnLoad: false,
+        logLevel: 'error'
       })
+
+      // Wait longer for DOM to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 200))
+
+      // Prepare all diagrams first
+      const targets = []
       for (const [key, value] of this.mermaidCache.entries()) {
         const { code } = value
         const target = document.querySelector(key)
         if (!target) {
           continue
         }
+
         try {
-          mermaid.parse(code)
-          target.innerHTML = sanitize(code, PREVIEW_DOMPURIFY_CONFIG, true)
-          mermaid.init(undefined, target)
+          // Clean up any previous mermaid content
+          target.removeAttribute('data-processed')
+          target.innerHTML = '' // Clear previous content
+
+          // Force layout recalculation and visibility
+          // eslint-disable-next-line no-unused-expressions
+          target.offsetHeight
+          target.style.visibility = 'visible'
+          target.style.display = 'block'
+
+          // v11: parse first to validate
+          await mermaid.parse(code)
+
+          // v11: set the code content
+          target.textContent = code
+          targets.push(target)
         } catch (err) {
+          console.error('Mermaid parse error for:', code.substring(0, 50), err)
           target.innerHTML = '< Invalid Mermaid Codes >'
           target.classList.add(CLASS_OR_ID.AG_MATH_ERROR)
+        }
+      }
+
+      // Render all diagrams at once if we have any
+      if (targets.length > 0) {
+        try {
+          await mermaid.run({
+            nodes: targets,
+            suppressErrors: false
+          })
+
+          // Force multiple repaints to ensure visibility
+          await new Promise(resolve => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(resolve)
+              })
+            })
+          })
+        } catch (err) {
+          console.error('Mermaid batch render error:', err)
+          // Fallback: try individual rendering
+          for (const target of targets) {
+            try {
+              await mermaid.run({
+                nodes: [target],
+                suppressErrors: false
+              })
+            } catch (individualErr) {
+              console.error('Individual render fallback failed:', individualErr)
+            }
+          }
         }
       }
 
